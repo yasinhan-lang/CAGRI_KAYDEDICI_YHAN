@@ -46,12 +46,22 @@ public final class CallRecorder {
     private Uri uri;
     private long startMs;
     private boolean incoming;
+    private Context appCtx;
+    private int[] chain = new int[0];
+    private int chainIdx;
+    private int usedSource = -1;
+    private int level;
+    private int silentSecs;
+    private boolean heard;
 
     private CallRecorder() {}
 
     public synchronized boolean isRecording() { return recorder != null; }
 
     public synchronized long startedAt() { return startMs; }
+
+    /** 0..32767 arası son ses seviyesi. */
+    public synchronized int level() { return level; }
 
     private void notifyListeners() {
         final boolean r = recorder != null;
@@ -62,28 +72,49 @@ public final class CallRecorder {
 
     public synchronized boolean start(Context ctx, boolean incomingCall) {
         if (recorder != null) return true;
-        ContentResolver cr = ctx.getContentResolver();
+        appCtx = ctx.getApplicationContext();
         incoming = incomingCall;
         startMs = System.currentTimeMillis();
+        chain = Prefs.sourceChain(appCtx);
+        level = 0;
+        silentSecs = 0;
+        heard = false;
+        if (!openAndStart(0)) {
+            EventLog.add(appCtx, "❌ Kayıt başlatılamadı (hiçbir ses kaynağı açılmadı)");
+            return false;
+        }
+        notifyListeners();
+        handler.removeCallbacks(monitor);
+        handler.postDelayed(monitor, 1000);
+        return true;
+    }
 
+    private boolean createEntry(ContentResolver cr) {
         ContentValues v = new ContentValues();
-        v.put(MediaStore.MediaColumns.DISPLAY_NAME, "kayit_" + startMs + ".m4a");
+        v.put(MediaStore.MediaColumns.DISPLAY_NAME, "kayit_" + System.currentTimeMillis() + ".m4a");
         v.put(MediaStore.MediaColumns.MIME_TYPE, "audio/mp4");
         v.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_MUSIC + "/" + FOLDER);
         v.put(MediaStore.MediaColumns.IS_PENDING, 1);
         v.put(MediaStore.Audio.Media.IS_MUSIC, 0);
         try {
             uri = cr.insert(MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY), v);
-            if (uri == null) return false;
+            if (uri == null) { EventLog.add(appCtx, "❌ Dosya oluşturulamadı"); return false; }
             pfd = cr.openFileDescriptor(uri, "rw");
             if (pfd == null) { cleanupFailed(cr); return false; }
+            return true;
         } catch (Exception e) {
+            EventLog.add(appCtx, "❌ Dosya hatası: " + e.getClass().getSimpleName());
             cleanupFailed(cr);
             return false;
         }
+    }
 
-        for (int src : Prefs.sourceChain(ctx)) {
-            MediaRecorder r = newRecorder(ctx);
+    private boolean openAndStart(int fromIdx) {
+        ContentResolver cr = appCtx.getContentResolver();
+        if (!createEntry(cr)) return false;
+        for (int i = fromIdx; i < chain.length; i++) {
+            int src = chain[i];
+            MediaRecorder r = newRecorder(appCtx);
             try {
                 r.setAudioSource(src);
                 r.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4);
@@ -95,18 +126,59 @@ public final class CallRecorder {
                 r.prepare();
                 r.start();
                 recorder = r;
-                break;
+                chainIdx = i;
+                usedSource = src;
+                EventLog.add(appCtx, "🎙️ Kayıt başladı · kaynak: " + Prefs.sourceName(src));
+                return true;
             } catch (Throwable e) {
+                EventLog.add(appCtx, "⚠️ Kaynak açılamadı: " + Prefs.sourceName(src) + " (" + e.getClass().getSimpleName() + ")");
                 try { r.reset(); } catch (Throwable ignored) { }
                 try { r.release(); } catch (Throwable ignored) { }
             }
         }
-        if (recorder == null) {
-            cleanupFailed(cr);
-            return false;
+        cleanupFailed(cr);
+        return false;
+    }
+
+    /** Her saniye ses seviyesini ölçer; hiç ses yoksa sıradaki kaynağa geçer. */
+    private final Runnable monitor = new Runnable() {
+        @Override
+        public void run() {
+            synchronized (CallRecorder.this) {
+                if (recorder == null) return;
+                int a = 0;
+                try { a = recorder.getMaxAmplitude(); } catch (Throwable ignored) { }
+                level = a;
+                if (a > 0) {
+                    if (!heard) EventLog.add(appCtx, "🔊 Ses alınıyor (" + Prefs.sourceName(usedSource) + ")");
+                    heard = true;
+                } else if (!heard) {
+                    silentSecs++;
+                    if (silentSecs >= 5) {
+                        if (chainIdx + 1 < chain.length) {
+                            EventLog.add(appCtx, "🔇 " + Prefs.sourceName(usedSource) + " sessiz, sonraki kaynak deneniyor");
+                            discardCurrent();
+                            silentSecs = 0;
+                            if (!openAndStart(chainIdx + 1)) {
+                                EventLog.add(appCtx, "❌ Sesli kaynak bulunamadı. Mikrofon izni ve erişilebilirlik hizmetini kontrol edin.");
+                                notifyListeners();
+                                return;
+                            }
+                        } else if (silentSecs == 5) {
+                            EventLog.add(appCtx, "🔇 Hiçbir kaynaktan ses gelmiyor. Telefon mikrofonu bu uygulamaya kapatıyor olabilir.");
+                        }
+                    }
+                }
+            }
+            handler.postDelayed(this, 1000);
         }
-        notifyListeners();
-        return true;
+    };
+
+    private void discardCurrent() {
+        try { recorder.stop(); } catch (Throwable ignored) { }
+        try { recorder.release(); } catch (Throwable ignored) { }
+        recorder = null;
+        cleanupFailed(appCtx.getContentResolver());
     }
 
     @SuppressWarnings("deprecation")
@@ -123,6 +195,8 @@ public final class CallRecorder {
     }
 
     public synchronized void stop(Context ctx) {
+        handler.removeCallbacks(monitor);
+        level = 0;
         if (recorder == null) return;
         final Context app = ctx.getApplicationContext();
         final ContentResolver cr = app.getContentResolver();
@@ -140,9 +214,11 @@ public final class CallRecorder {
         notifyListeners();
         if (u == null) return;
         if (!ok || dur < 1500) {
+            EventLog.add(app, "⚠️ Kayıt çok kısa / hatalı, silindi");
             try { cr.delete(u, null, null); } catch (Exception ignored) { }
             return;
         }
+        EventLog.add(app, "✅ Kayıt kaydedildi · " + fmtDur(dur) + (heard ? "" : " · (ses algılanmadı!)"));
         ContentValues v = new ContentValues();
         v.put(MediaStore.MediaColumns.IS_PENDING, 0);
         try { cr.update(u, v, null, null); } catch (Exception ignored) { }

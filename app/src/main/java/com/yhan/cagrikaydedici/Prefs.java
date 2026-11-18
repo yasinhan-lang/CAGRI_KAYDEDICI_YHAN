@@ -28,6 +28,25 @@ public final class Prefs {
     public static boolean speaker(Context c) { return sp(c).getBoolean("speaker", false); }
     public static void setSpeaker(Context c, boolean v) { sp(c).edit().putBoolean("speaker", v).apply(); }
 
+    public static boolean bubble(Context c) { return sp(c).getBoolean("bubble", true); }
+    public static void setBubble(Context c, boolean v) { sp(c).edit().putBoolean("bubble", v).apply(); }
+
+    public static int bubbleX(Context c) { return sp(c).getInt("bx", -1); }
+    public static int bubbleY(Context c) { return sp(c).getInt("by", -1); }
+    public static void setBubblePos(Context c, int x, int y) { sp(c).edit().putInt("bx", x).putInt("by", y).apply(); }
+
+    public static String sourceName(int src) {
+        switch (src) {
+            case MediaRecorder.AudioSource.VOICE_RECOGNITION: return "Ses tanıma";
+            case MediaRecorder.AudioSource.MIC: return "Mikrofon";
+            case MediaRecorder.AudioSource.VOICE_CALL: return "Görüşme hattı";
+            case MediaRecorder.AudioSource.VOICE_COMMUNICATION: return "İletişim";
+            case MediaRecorder.AudioSource.CAMCORDER: return "Kamera mikrofonu";
+            case MediaRecorder.AudioSource.DEFAULT: return "Varsayılan";
+            default: return "Kaynak " + src;
+        }
+    }
+
     public static int source(Context c) {
         int s = sp(c).getInt("source", 0);
         return (s < 0 || s >= SOURCE_NAMES.length) ? 0 : s;
@@ -44,7 +63,8 @@ public final class Prefs {
             case 2: return new int[]{MediaRecorder.AudioSource.MIC};
             case 3: return new int[]{MediaRecorder.AudioSource.VOICE_CALL, MediaRecorder.AudioSource.VOICE_RECOGNITION, MediaRecorder.AudioSource.MIC};
             case 4: return new int[]{MediaRecorder.AudioSource.VOICE_COMMUNICATION, MediaRecorder.AudioSource.MIC};
-            default: return new int[]{MediaRecorder.AudioSource.VOICE_RECOGNITION, MediaRecorder.AudioSource.MIC, MediaRecorder.AudioSource.DEFAULT};
+            default: return new int[]{MediaRecorder.AudioSource.VOICE_RECOGNITION, MediaRecorder.AudioSource.MIC,
+                    MediaRecorder.AudioSource.CAMCORDER, MediaRecorder.AudioSource.VOICE_COMMUNICATION};
         }
     }
 }

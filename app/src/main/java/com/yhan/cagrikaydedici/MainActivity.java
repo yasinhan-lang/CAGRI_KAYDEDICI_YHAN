@@ -15,6 +15,7 @@ import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.media.MediaPlayer;
+import android.media.MediaRecorder;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -40,6 +41,7 @@ import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.io.File;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -71,6 +73,10 @@ public class MainActivity extends Activity implements CallRecorder.Listener {
     private LinearLayout permCard;
     private TextView sourceChip;
     private String query = "";
+    private TextView logText, testBtn;
+    private MediaRecorder testRec;
+    private File testFile;
+    private int testPeak;
 
     private LinearLayout playerBar;
     private TextView playerTitle, playerTime, playerBtn;
@@ -98,6 +104,7 @@ public class MainActivity extends Activity implements CallRecorder.Listener {
         CallAccessibilityService.refreshListener();
         refreshStatus();
         loadRecordings();
+        refreshLog();
     }
 
     @Override
@@ -116,13 +123,14 @@ public class MainActivity extends Activity implements CallRecorder.Listener {
     @Override
     public void onRecordingChanged(boolean recording) {
         refreshStatus();
+        refreshLog();
         if (!recording) {
             h.removeCallbacks(reload);
             h.postDelayed(reload, 1500);
         }
     }
 
-    private final Runnable reload = this::loadRecordings;
+    private final Runnable reload = () -> { loadRecordings(); refreshLog(); };
 
     // ------------------------------------------------------------------ arayüz
 
@@ -191,6 +199,7 @@ public class MainActivity extends Activity implements CallRecorder.Listener {
         permCard = card();
         list.addHeaderView(wrap(permCard, 6, 6), null, false);
         list.addHeaderView(wrap(buildSettings(), 6, 6), null, false);
+        list.addHeaderView(wrap(buildDiag(), 6, 6), null, false);
         list.addHeaderView(buildListHeader(), null, false);
         list.addFooterView(buildFooter(), null, false);
 
@@ -295,6 +304,8 @@ public class MainActivity extends Activity implements CallRecorder.Listener {
         c.addView(settingSwitch("Giden aramalar", null, Prefs.outgoing(this), (b, on) -> Prefs.setOutgoing(this, on)));
         c.addView(settingSwitch("Hoparlörü otomatik aç", "Karşı tarafın sesi daha net kaydedilir",
                 Prefs.speaker(this), (b, on) -> Prefs.setSpeaker(this, on)));
+        c.addView(settingSwitch("Kayıtta yüzen simge", "Görüşmede küçük simge; dokun: kaydı durdur/başlat",
+                Prefs.bubble(this), (b, on) -> Prefs.setBubble(this, on)));
 
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
@@ -321,6 +332,139 @@ public class MainActivity extends Activity implements CallRecorder.Listener {
         folder.setPadding(0, dp(8), 0, 0);
         c.addView(folder);
         return c;
+    }
+
+    private View buildDiag() {
+        LinearLayout c = card();
+        LinearLayout top = new LinearLayout(this);
+        top.setOrientation(LinearLayout.HORIZONTAL);
+        top.setGravity(Gravity.CENTER_VERTICAL);
+        top.addView(text("🩺 Tanılama", 16, C_INK, true),
+                new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        TextView clr = pillButton("Temizle", C_SOFT, C_CORAL);
+        clr.setOnClickListener(v -> { EventLog.clear(this); refreshLog(); });
+        top.addView(clr);
+        c.addView(top);
+
+        TextView hint = text("Kayıt olmazsa bir arama yapıp buraya bakın; neyin takıldığı yazar.", 12, C_SUB, false);
+        hint.setPadding(0, dp(4), 0, dp(6));
+        c.addView(hint);
+
+        logText = text("", 11.5f, C_INK, false);
+        logText.setTypeface(Typeface.MONOSPACE);
+        logText.setPadding(dp(10), dp(8), dp(10), dp(8));
+        logText.setBackground(round(0xFFF7F4F2, 12));
+        logText.setMaxLines(14);
+        c.addView(logText);
+
+        LinearLayout btns = new LinearLayout(this);
+        btns.setOrientation(LinearLayout.HORIZONTAL);
+        btns.setGravity(Gravity.CENTER);
+        btns.setPadding(0, dp(10), 0, 0);
+        testBtn = pillButton("🎤 Mikrofon testi", C_CORAL, Color.WHITE);
+        testBtn.setOnClickListener(v -> testRecord());
+        btns.addView(testBtn);
+        TextView auto = pillButton("🚀 Otomatik başlatma", C_SOFT, C_CORAL);
+        auto.setOnClickListener(v -> openAutoStart());
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.leftMargin = dp(8);
+        btns.addView(auto, lp);
+        c.addView(btns);
+        return c;
+    }
+
+    private void refreshLog() {
+        if (logText == null) return;
+        String s = EventLog.get(this);
+        logText.setText(s.isEmpty() ? "Henüz olay yok." : s);
+    }
+
+    /** Marka fark etmeksizin: üreticinin otomatik başlatma ekranı varsa onu, yoksa uygulama bilgisini açar. */
+    private void openAutoStart() {
+        String[][] comps = {
+                {"com.miui.securitycenter", "com.miui.permcenter.autostart.AutoStartManagementActivity"},
+                {"com.huawei.systemmanager", "com.huawei.systemmanager.startupmgr.ui.StartupNormalAppListActivity"},
+                {"com.huawei.systemmanager", "com.huawei.systemmanager.optimize.process.ProtectActivity"},
+                {"com.coloros.safecenter", "com.coloros.safecenter.permission.startup.StartupAppListActivity"},
+                {"com.oplus.safecenter", "com.oplus.safecenter.permission.startup.StartupAppListActivity"},
+                {"com.vivo.permissionmanager", "com.vivo.permissionmanager.activity.BgStartUpManagerActivity"},
+                {"com.iqoo.secure", "com.iqoo.secure.ui.phoneoptimize.AddWhiteListActivity"},
+                {"com.samsung.android.lool", "com.samsung.android.sm.ui.battery.BatteryActivity"},
+                {"com.asus.mobilemanager", "com.asus.mobilemanager.MainActivity"},
+                {"com.oneplus.security", "com.oneplus.security.chainlaunch.view.ChainLaunchAppListActivity"},
+                {"com.transsion.phonemaster", "com.cyin.himgr.autostart.AutoStartActivity"}
+        };
+        for (String[] cn : comps) {
+            Intent i = new Intent().setComponent(new ComponentName(cn[0], cn[1]));
+            if (i.resolveActivityInfo(getPackageManager(), 0) != null) {
+                try {
+                    startActivity(i);
+                    Toast.makeText(this, "Listede \"Bzk.Kayıt\" uygulamasını açık konuma getirin", Toast.LENGTH_LONG).show();
+                    return;
+                } catch (Exception ignored) { }
+            }
+        }
+        Toast.makeText(this, "Pil → Kısıtlama yok / Arka planda çalışmaya izin ver", Toast.LENGTH_LONG).show();
+        openAppDetails();
+    }
+
+    @SuppressWarnings("deprecation")
+    private void testRecord() {
+        if (testRec != null) return;
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            askPerms();
+            return;
+        }
+        stopPlayer();
+        testFile = new File(getCacheDir(), "mikrofon_testi.m4a");
+        MediaRecorder r = Build.VERSION.SDK_INT >= 31 ? new MediaRecorder(this) : new MediaRecorder();
+        try {
+            r.setAudioSource(MediaRecorder.AudioSource.MIC);
+            r.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4);
+            r.setAudioEncoder(MediaRecorder.AudioEncoder.AAC);
+            r.setOutputFile(testFile.getAbsolutePath());
+            r.prepare();
+            r.start();
+        } catch (Exception e) {
+            try { r.release(); } catch (Exception ignored) { }
+            EventLog.add(this, "❌ Mikrofon testi başlamadı: " + e.getClass().getSimpleName());
+            refreshLog();
+            return;
+        }
+        testRec = r;
+        testPeak = 0;
+        testBtn.setText("🔴 Konuşun… 5");
+        for (int k = 1; k <= 5; k++) {
+            final int left = 5 - k;
+            h.postDelayed(() -> {
+                if (testRec == null) return;
+                try { testPeak = Math.max(testPeak, testRec.getMaxAmplitude()); } catch (Exception ignored) { }
+                if (left > 0) testBtn.setText("🔴 Konuşun… " + left);
+                else finishTest();
+            }, k * 1000L);
+        }
+    }
+
+    private void finishTest() {
+        if (testRec == null) return;
+        try { testRec.stop(); } catch (Exception ignored) { }
+        testRec.release();
+        testRec = null;
+        testBtn.setText("🎤 Mikrofon testi");
+        EventLog.add(this, testPeak > 0 ? "✅ Mikrofon testi: ses alındı (seviye " + testPeak + ")"
+                : "❌ Mikrofon testi: ses alınamadı");
+        refreshLog();
+        stopPlayer();
+        try {
+            mp = new MediaPlayer();
+            mp.setDataSource(testFile.getAbsolutePath());
+            mp.prepare();
+            mp.setOnCompletionListener(x -> stopPlayer());
+            mp.start();
+            Toast.makeText(this, "Test kaydı çalınıyor", Toast.LENGTH_SHORT).show();
+        } catch (Exception e) {
+            if (mp != null) { mp.release(); mp = null; }
+        }
     }
 
     private View buildListHeader() {
@@ -499,7 +643,7 @@ public class MainActivity extends Activity implements CallRecorder.Listener {
         if (mascot == null) return;
         boolean enabled = Prefs.enabled(this);
         boolean perms = corePermsOk();
-        boolean acc = accessibilityOn();
+        boolean acc = accessibilityOn() && CallAccessibilityService.isRunning();
         boolean rec = CallRecorder.get().isRecording();
         if (mainSwitch.isChecked() != enabled) mainSwitch.setChecked(enabled);
 
@@ -543,7 +687,8 @@ public class MainActivity extends Activity implements CallRecorder.Listener {
                     "İzin ver", v -> askPerms(), !perms));
         }
         if (!acc) {
-            String hint = "Ayarlar → Erişilebilirlik → Yüklü uygulamalar → \"BozokluHAN Çağrı Kaydedici\" → Aç.";
+            String hint = "Ayarlar → Erişilebilirlik → Yüklü uygulamalar → \"BozokluHAN Çağrı Kaydedici\" → Aç."
+                    + "\nZaten açık görünüyorsa kapatıp yeniden açın (telefon hizmeti durdurmuş olabilir).";
             if (Build.VERSION.SDK_INT >= 33) {
                 hint += "\nAçılmıyor / gri görünüyorsa: Uygulama bilgisi → sağ üst ⋮ → \"Kısıtlanmış ayarlara izin ver\", sonra tekrar deneyin.";
             }
