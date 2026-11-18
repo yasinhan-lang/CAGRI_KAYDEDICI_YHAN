@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Bzk.Kayıt</string>
+    <string name="acc_label">BozokluHAN Çağrı Kaydedici</string>
+    <string name="acc_desc">Telefon görüşmelerini otomatik kaydedebilmek için gereklidir. Bu hizmet ekranınızdaki içeriği okumaz, yalnızca arama başladığında kaydı başlatır.</string>
+</resources>

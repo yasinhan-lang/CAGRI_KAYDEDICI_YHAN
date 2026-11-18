@@ -1,0 +1,46 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.yhan.cagrikaydedici'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.yhan.cagrikaydedici"
+        minSdk 29
+        targetSdk 34
+        versionCode 1
+        versionName "1.0"
+    }
+
+    signingConfigs {
+        yhan {
+            storeFile file('yhan.keystore')
+            storePassword 'yhan2026'
+            keyAlias 'yhan'
+            keyPassword 'yhan2026'
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.yhan
+        }
+        debug {
+            signingConfig signingConfigs.yhan
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+        encoding 'UTF-8'
+    }
+
+    lint {
+        checkReleaseBuilds false
+        abortOnError false
+    }
+}
